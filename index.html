@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>춘천시 버스 노선 빈도 지도</title>
+  <meta name="description" content="춘천시 시내버스 노선별 하루 운행횟수를 선 굵기로 표현한 인터랙티브 지도입니다." />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg-deep:    #080c18;
+      --bg-panel:   rgba(8, 12, 26, 0.93);
+      --border:     rgba(255,255,255,0.07);
+      --text-main:  #e2e8f0;
+      --text-dim:   #64748b;
+      --text-mid:   #94a3b8;
+      --accent:     #3b82f6;
+    }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg-deep);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #map { width: 100%; height: 100vh; }
+
+    /* LOADING */
+    #loading {
+      position: fixed; inset: 0; z-index: 9999;
+      background: var(--bg-deep);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 18px;
+    }
+    .spinner {
+      width: 44px; height: 44px;
+      border: 3px solid rgba(255,255,255,0.08);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading p { color: var(--text-mid); font-size: 0.9rem; }
+
+    /* SIDEBAR */
+    #sidebar {
+      position: absolute; top: 16px; left: 16px;
+      width: 290px;
+      background: var(--bg-panel);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 20px;
+      z-index: 1000;
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
+    }
+    #sidebar::-webkit-scrollbar { width: 3px; }
+    #sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+    .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+    .logo-icon {
+      width: 34px; height: 34px;
+      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem; flex-shrink: 0;
+    }
+    .logo h1 { font-size: 1rem; font-weight: 700; color: #fff; line-height: 1.2; }
+    .subtitle { font-size: 0.72rem; color: var(--text-dim); margin-bottom: 16px; padding-left: 44px; }
+
+    .divider { height: 1px; background: var(--border); margin: 14px 0; }
+
+    .section-label {
+      font-size: 0.65rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .1em;
+      color: var(--text-dim); margin-bottom: 10px;
+    }
+
+    /* STATS */
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .stat-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px 10px; text-align: center;
+    }
+    .stat-val { font-size: 1.5rem; font-weight: 800; color: #fff; }
+    .stat-lbl { font-size: 0.68rem; color: var(--text-dim); margin-top: 2px; }
+
+    /* FILTERS */
+    .filter-item {
+      display: flex; align-items: center; gap: 9px;
+      padding: 7px 9px; border-radius: 9px;
+      cursor: pointer; transition: background .15s;
+      user-select: none;
+    }
+    .filter-item:hover { background: rgba(255,255,255,0.04); }
+    .filter-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+    .filter-label { flex: 1; font-size: 0.82rem; color: #cbd5e1; }
+    .filter-cnt { font-size: 0.7rem; color: var(--text-dim); }
+    .filter-cb {
+      appearance: none; width: 15px; height: 15px;
+      border: 1.5px solid rgba(255,255,255,0.18);
+      border-radius: 4px; cursor: pointer;
+      position: relative; transition: all .15s;
+    }
+    .filter-cb:checked { background: var(--accent); border-color: var(--accent); }
+    .filter-cb:checked::after {
+      content: 'v'; position: absolute;
+      top: -2px; left: 1px; font-size: 10px; color: #fff;
+    }
+
+    /* LEGEND */
+    .legend-steps {
+      display: flex; align-items: flex-end;
+      gap: 5px; padding: 8px 0;
+    }
+    .legend-step {
+      flex: 1; border-radius: 3px;
+      background: linear-gradient(90deg, #64748b, #94a3b8);
+    }
+    .legend-xlabels {
+      display: flex; justify-content: space-between;
+      font-size: 0.67rem; color: var(--text-dim); margin-top: 3px;
+    }
+
+    /* MODE BADGE */
+    #mode-badge {
+      position: absolute; top: 16px; right: 16px; z-index: 1000;
+      background: var(--bg-panel);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-radius: 10px; padding: 8px 14px;
+      display: flex; align-items: center; gap: 8px;
+      font-size: 0.75rem; color: var(--text-mid);
+      max-width: 260px;
+    }
+    .mode-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink:0;
+      background: #f59e0b;
+      box-shadow: 0 0 6px #f59e0b;
+    }
+
+    /* INFO PANEL */
+    #info-panel {
+      position: absolute; bottom: 24px; left: 50%;
+      transform: translateX(-50%);
+      background: var(--bg-panel);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 18px 22px;
+      z-index: 1000; display: none;
+      min-width: 330px; max-width: 480px;
+    }
+    #info-panel.open {
+      display: block;
+      animation: slideUp .25s cubic-bezier(.22,1,.36,1);
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+    .info-header { display: flex; align-items: flex-start; gap: 14px; }
+    .info-badge { font-size: 1.8rem; font-weight: 800; line-height: 1; flex-shrink: 0; }
+    .info-meta-type { font-size: 0.72rem; color: var(--text-dim); }
+    .info-meta-path { font-size: 0.88rem; color: #cbd5e1; margin-top: 3px; }
+    .info-cells {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px; margin-top: 14px;
+    }
+    .info-cell { text-align: center; }
+    .info-cell-val { font-size: 1.1rem; font-weight: 700; color: #fff; }
+    .info-cell-lbl { font-size: 0.68rem; color: var(--text-dim); margin-top: 2px; }
+    #info-close {
+      position: absolute; top: 12px; right: 14px;
+      background: none; border: none;
+      color: var(--text-dim); cursor: pointer;
+      font-size: 1rem; padding: 4px;
+      transition: color .15s;
+    }
+    #info-close:hover { color: var(--text-main); }
+
+    /* LEAFLET OVERRIDES */
+    .leaflet-control-zoom a {
+      background: var(--bg-panel) !important;
+      border-color: var(--border) !important;
+      color: var(--text-mid) !important;
+    }
+    .leaflet-control-zoom a:hover { background: rgba(59,130,246,.2) !important; }
+    .leaflet-control-attribution {
+      background: rgba(8,12,26,.7) !important;
+      color: #475569 !important; font-size: 0.6rem !important;
+    }
+    .leaflet-control-attribution a { color: #64748b !important; }
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>춘천시 버스 노선 데이터 로딩 중...</p>
+</div>
+
+<div id="map"></div>
+
+<aside id="sidebar">
+  <div class="logo">
+    <div class="logo-icon">&#x1F68C;</div>
+    <h1>춘천시<br/>버스 노선 지도</h1>
+  </div>
+  <p class="subtitle">선 굵기 = 하루 운행횟수</p>
+
+  <div class="divider"></div>
+
+  <div class="section-label">전체 현황</div>
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-val" id="stat-routes">-</div>
+      <div class="stat-lbl">전체 노선 수</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val" id="stat-trips">-</div>
+      <div class="stat-lbl">일 총 운행횟수</div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="section-label">노선 유형 필터</div>
+  <div id="filters"></div>
+
+  <div class="divider"></div>
+
+  <div class="section-label">운행 빈도 (선 굵기)</div>
+  <div class="legend-steps" id="legend-steps"></div>
+  <div class="legend-xlabels">
+    <span>적음 (1회)</span>
+    <span>많음 (80+회)</span>
+  </div>
+</aside>
+
+<div id="mode-badge">
+  <div class="mode-dot"></div>
+  <span>데모 데이터 (실데이터 전환 방법: README.md 참조)</span>
+</div>
+
+<div id="info-panel">
+  <button id="info-close" title="닫기">x</button>
+  <div class="info-header">
+    <div class="info-badge" id="info-no">-</div>
+    <div>
+      <div class="info-meta-type" id="info-type">-</div>
+      <div class="info-meta-path" id="info-path">-</div>
+    </div>
+  </div>
+  <div class="info-cells">
+    <div class="info-cell">
+      <div class="info-cell-val" id="info-trips">-</div>
+      <div class="info-cell-lbl">일 운행횟수</div>
+    </div>
+    <div class="info-cell">
+      <div class="info-cell-val" id="info-interval">-</div>
+      <div class="info-cell-lbl">평균 배차간격</div>
+    </div>
+    <div class="info-cell">
+      <div class="info-cell-val" id="info-stops">-</div>
+      <div class="info-cell-lbl">정류장 수</div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* =============================================================
+   데이터 (fetch_data.py 실행 후 routes.json 으로 교체 가능)
+   ============================================================= */
+
+const ROUTE_TYPES = {
+  '간선': { color: '#3B82F6', label: '간선버스',       order: 1 },
+  '지선': { color: '#10B981', label: '지선버스',       order: 2 },
+  '마을': { color: '#F59E0B', label: '마을버스(봄봄)', order: 3 },
+  '통학': { color: '#A855F7', label: '통학(S)버스',    order: 4 },
+  '병원': { color: '#EF4444', label: '대학병원노선',    order: 5 },
+};
+
+// 춘천시 주요 정류장 좌표 [위도, 경도]
+const P = {
+  춘천역:    [37.8817, 127.7268],
+  남춘천역:  [37.8609, 127.7291],
+  시청:      [37.8815, 127.7298],
+  명동:      [37.8778, 127.7316],
+  중앙시장:  [37.8766, 127.7283],
+  소양로:    [37.8756, 127.7238],
+  한림대병:  [37.8821, 127.7152],
+  죽림동:    [37.8897, 127.7183],
+  후평환승:  [37.8960, 127.7399],
+  후평동:    [37.8930, 127.7460],
+  강원대:    [37.8717, 127.7441],
+  강원대병:  [37.8755, 127.7467],
+  의료원:    [37.8800, 127.7395],
+  퇴계동:    [37.8750, 127.7594],
+  석사동:    [37.8885, 127.7631],
+  온의동:    [37.8920, 127.7750],
+  동내면:    [37.8648, 127.7779],
+  신북읍:    [37.9358, 127.7248],
+  동산면:    [37.9135, 127.7109],
+  사북면:    [37.9671, 127.8293],
+  서면:      [37.8273, 127.7025],
+  북산면:    [38.0198, 127.7617],
+  소양댐:    [37.9299, 127.7494],
+  동면:      [37.8620, 127.8100],
+};
+
+const ROUTES = [
+  // ---- 간선버스 ----
+  { id:'g1',   no:'1',    type:'간선', trips:72, stops:18, start:'춘천역',   end:'강원대학교',  path:[P.춘천역, P.한림대병, P.시청, P.명동, P.중앙시장, P.소양로, P.의료원, P.후평환승, P.강원대] },
+  { id:'g2',   no:'2',    type:'간선', trips:65, stops:22, start:'죽림동',   end:'퇴계동',      path:[P.죽림동, P.한림대병, P.시청, P.명동, P.후평환승, P.강원대, P.퇴계동] },
+  { id:'g3',   no:'3',    type:'간선', trips:83, stops:15, start:'춘천역',   end:'후평환승센터', path:[P.춘천역, P.시청, P.명동, P.의료원, P.후평환승, P.후평동] },
+  { id:'g4',   no:'4',    type:'간선', trips:58, stops:26, start:'남춘천역', end:'신북읍',      path:[P.남춘천역, P.소양로, P.시청, P.춘천역, P.죽림동, P.동산면, P.신북읍] },
+  { id:'g7',   no:'7',    type:'간선', trips:61, stops:20, start:'한림대병원', end:'석사동',    path:[P.한림대병, P.춘천역, P.시청, P.명동, P.후평환승, P.석사동] },
+  { id:'g8',   no:'8',    type:'간선', trips:55, stops:19, start:'남춘천역', end:'강원대학교',  path:[P.남춘천역, P.소양로, P.명동, P.시청, P.의료원, P.후평환승, P.강원대] },
+  // ---- 지선버스 ----
+  { id:'j11',  no:'11',   type:'지선', trips:42, stops:16, start:'춘천역',   end:'동내면',     path:[P.춘천역, P.시청, P.강원대, P.퇴계동, P.동내면] },
+  { id:'j12',  no:'12',   type:'지선', trips:38, stops:14, start:'후평환승', end:'온의동',     path:[P.후평환승, P.석사동, P.온의동] },
+  { id:'j15',  no:'15',   type:'지선', trips:34, stops:18, start:'명동',     end:'퇴계동',     path:[P.명동, P.시청, P.강원대, P.퇴계동, P.석사동] },
+  { id:'j33',  no:'33',   type:'지선', trips:27, stops:20, start:'춘천역',   end:'동면',       path:[P.춘천역, P.남춘천역, P.강원대, P.동내면, P.동면] },
+  { id:'j200', no:'200',  type:'지선', trips:21, stops:12, start:'후평환승', end:'온의동',     path:[P.후평환승, P.후평동, P.석사동, P.온의동] },
+  { id:'j300', no:'300',  type:'지선', trips:18, stops:15, start:'시청',     end:'소양댐',     path:[P.시청, P.춘천역, P.죽림동, P.동산면, P.소양댐] },
+  // ---- 마을버스(봄봄) ----
+  { id:'b1',   no:'봄봄1', type:'마을', trips:10, stops:10, start:'신북읍', end:'소양댐',    path:[P.신북읍, P.동산면, P.소양댐] },
+  { id:'b2',   no:'봄봄2', type:'마을', trips:8,  stops:8,  start:'서면',   end:'남춘천역',  path:[P.서면, P.소양로, P.남춘천역] },
+  { id:'b3',   no:'봄봄3', type:'마을', trips:7,  stops:9,  start:'사북면', end:'신북읍',    path:[P.사북면, P.신북읍] },
+  { id:'b4',   no:'봄봄4', type:'마을', trips:6,  stops:7,  start:'북산면', end:'동산면',    path:[P.북산면, P.소양댐, P.동산면, P.신북읍] },
+  // ---- 통학(S)버스 ----
+  { id:'s1',   no:'S1',   type:'통학', trips:6,  stops:8,  start:'석사동', end:'시청',      path:[P.석사동, P.후평환승, P.의료원, P.시청, P.춘천역] },
+  { id:'s2',   no:'S2',   type:'통학', trips:5,  stops:7,  start:'퇴계동', end:'시청',      path:[P.퇴계동, P.강원대, P.후평환승, P.시청] },
+  // ---- 대학병원노선 ----
+  { id:'h901', no:'901',  type:'병원', trips:14, stops:12, start:'신북읍', end:'강원대병원', path:[P.신북읍, P.동산면, P.시청, P.강원대병] },
+  { id:'h902', no:'902',  type:'병원', trips:12, stops:14, start:'동면',   end:'한림대병원', path:[P.동면, P.남춘천역, P.소양로, P.한림대병] },
+  { id:'h903', no:'903',  type:'병원', trips:10, stops:11, start:'서면',   end:'강원대병원', path:[P.서면, P.소양로, P.명동, P.시청, P.강원대병] },
+];
+
+/* =============================================================
+   앱 로직
+   ============================================================= */
+
+const MAX_TRIPS = Math.max(...ROUTES.map(r => r.trips));
+let activeFilters = new Set(Object.keys(ROUTE_TYPES));
+let drawnLayers = [];
+let selectedId = null;
+
+/** 로그 스케일 선 굵기. 최소 3.5px 보장 */
+function lineWidth(trips) {
+  var MIN = 3.5, MAX = 15;
+  return MIN + (Math.log1p(trips) / Math.log1p(MAX_TRIPS)) * (MAX - MIN);
+}
+
+// 지도 초기화
+var map = L.map('map', {
+  center: [37.8813, 127.7298],
+  zoom: 12,
+  zoomControl: false,
+});
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+  subdomains: 'abcd',
+  maxZoom: 19,
+}).addTo(map);
+
+// 노선 렌더링
+function renderRoutes() {
+  drawnLayers.forEach(function(l) { map.removeLayer(l); });
+  drawnLayers = [];
+
+  var sorted = ROUTES.slice().sort(function(a, b) { return a.trips - b.trips; });
+
+  sorted.forEach(function(route) {
+    if (!activeFilters.has(route.type)) return;
+    var color = ROUTE_TYPES[route.type].color;
+    var w = lineWidth(route.trips);
+
+    var glow = L.polyline(route.path, {
+      color: color, weight: w + 8, opacity: 0.12,
+      lineCap: 'round', lineJoin: 'round',
+    }).addTo(map);
+
+    var line = L.polyline(route.path, {
+      color: color, weight: w, opacity: 0.82,
+      lineCap: 'round', lineJoin: 'round',
+    }).addTo(map);
+
+    line.on('mouseover', function() {
+      this.setStyle({ opacity: 1, weight: w + 2 });
+      map.getContainer().style.cursor = 'pointer';
+    });
+    line.on('mouseout', function() {
+      if (selectedId !== route.id) this.setStyle({ opacity: 0.82, weight: w });
+      map.getContainer().style.cursor = '';
+    });
+    line.on('click', function(e) {
+      L.DomEvent.stopPropagation(e);
+      selectedId = route.id;
+      showInfo(route, color);
+    });
+
+    drawnLayers.push(glow, line);
+  });
+}
+
+// 정보 패널
+function showInfo(route, color) {
+  var interval = Math.round(600 / route.trips);
+  document.getElementById('info-no').textContent = route.no + '번';
+  document.getElementById('info-no').style.color = color;
+  document.getElementById('info-type').textContent = ROUTE_TYPES[route.type].label;
+  document.getElementById('info-path').textContent = route.start + ' -> ' + route.end;
+  document.getElementById('info-trips').textContent = route.trips + '회';
+  document.getElementById('info-interval').textContent = '약 ' + interval + '분';
+  document.getElementById('info-stops').textContent = route.stops + '개';
+  document.getElementById('info-panel').classList.add('open');
+}
+
+document.getElementById('info-close').addEventListener('click', function() {
+  document.getElementById('info-panel').classList.remove('open');
+  selectedId = null;
+});
+map.on('click', function() {
+  document.getElementById('info-panel').classList.remove('open');
+  selectedId = null;
+});
+
+// 필터 생성
+function buildFilters() {
+  var cnt = {};
+  ROUTES.forEach(function(r) { cnt[r.type] = (cnt[r.type] || 0) + 1; });
+  var container = document.getElementById('filters');
+
+  Object.entries(ROUTE_TYPES)
+    .sort(function(a, b) { return a[1].order - b[1].order; })
+    .forEach(function(entry) {
+      var key = entry[0], info = entry[1];
+      if (!cnt[key]) return;
+      var label = document.createElement('label');
+      label.className = 'filter-item';
+      label.innerHTML =
+        '<div class="filter-dot" style="background:' + info.color + '"></div>' +
+        '<span class="filter-label">' + info.label + '</span>' +
+        '<span class="filter-cnt">' + cnt[key] + '개</span>' +
+        '<input type="checkbox" class="filter-cb" checked />';
+      var cb = label.querySelector('input');
+      cb.addEventListener('change', function() {
+        if (cb.checked) activeFilters.add(key);
+        else activeFilters.delete(key);
+        renderRoutes();
+      });
+      container.appendChild(label);
+    });
+}
+
+// 범례 생성
+function buildLegend() {
+  var steps = [1, 5, 10, 20, 35, 55, 83];
+  var container = document.getElementById('legend-steps');
+  steps.forEach(function(t) {
+    var d = document.createElement('div');
+    d.className = 'legend-step';
+    d.style.height = (lineWidth(t) + 2) + 'px';
+    container.appendChild(d);
+  });
+}
+
+// 통계
+function buildStats() {
+  document.getElementById('stat-routes').textContent = ROUTES.length;
+  var total = ROUTES.reduce(function(s, r) { return s + r.trips; }, 0);
+  document.getElementById('stat-trips').textContent = total.toLocaleString();
+}
+
+// 시작
+buildFilters();
+buildLegend();
+buildStats();
+
+setTimeout(function() {
+  renderRoutes();
+  document.getElementById('loading').style.display = 'none';
+}, 700);
+</script>
+</body>
+</html>
